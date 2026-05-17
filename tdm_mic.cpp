@@ -168,15 +168,19 @@ void I2STDMAudioMicrophone::stop_driver_() {
   }
 }
 
-static void remap_best_mic_(uint8_t *buf, size_t len, uint8_t best_mic) {
-  if (best_mic == 0)
-    return;
-  uint8_t src_slot = MIC_SLOTS[best_mic];
+static void average_mics_(uint8_t *buf, size_t len) {
   size_t num_frames = len / FRAME_SZ;
   for (size_t f = 0; f < num_frames; f++) {
     size_t base = f * FRAME_SZ;
-    buf[base + 0] = buf[base + src_slot * 2 + 0];
-    buf[base + 1] = buf[base + src_slot * 2 + 1];
+    int32_t sum = 0;
+    for (int m = 0; m < 4; m++) {
+      size_t idx = base + MIC_SLOTS[m] * 2;
+      int16_t s;
+      memcpy(&s, &buf[idx], 2);
+      sum += s;
+    }
+    int16_t avg = (int16_t)(sum / 4);
+    memcpy(&buf[base], &avg, 2);
   }
 }
 
@@ -331,9 +335,8 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
           if (mic->debug_) {
             log_counter++;
             if (log_counter % 2 == 0) {
-              ESP_LOGI(TAG, "n:%.1f/%.1f/%.1f/%.1f best:MIC%d%s",
+              ESP_LOGI(TAG, "n:%.1f/%.1f/%.1f/%.1f avg%s",
                        e_norm[0], e_norm[1], e_norm[2], e_norm[3],
-                       mic->best_mic_ + 1,
                        has_activity ? " *" : "");
             }
           }
@@ -342,7 +345,7 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
           energy_frames = 0;
         }
 
-        remap_best_mic_(samples.data(), bytes_read, mic->best_mic_);
+        average_mics_(samples.data(), bytes_read);
 
         if (mic->correct_dc_offset_) {
           mic->fix_dc_offset_(samples);
