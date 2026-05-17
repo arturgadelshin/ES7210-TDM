@@ -6,4 +6,3 @@ __pycache__/
 .esphome/
 .vscode/
 *.pyc
-nul
