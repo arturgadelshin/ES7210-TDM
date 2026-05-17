@@ -1,0 +1,8 @@
+*.bin
+*.elf
+*.o
+__pycache__/
+.pioenvs/
+.esphome/
+.vscode/
+*.pyc
