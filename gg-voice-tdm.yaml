@@ -98,7 +98,7 @@ microphone:
     sample_rate: 16000
     bits_per_sample: 32bit
     correct_dc_offset: false
-    debug: false
+    debug: true
 
 # === ES8311 speaker ===
 audio_dac:
@@ -419,3 +419,15 @@ select:
 button:
   - platform: restart
     name: "Restart module"
+
+  - platform: template
+    name: "Calibrate Mics"
+    icon: "mdi:microphone-settings"
+    on_press:
+      - lambda: |-
+          if (id(tdm_mic).is_running()) {
+            id(tdm_mic).request_calibration();
+            ESP_LOGI("main", "Mic calibration requested — keep silence for 3 seconds");
+          } else {
+            ESP_LOGW("main", "Mic is not running, calibration skipped");
+          }

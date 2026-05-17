@@ -193,6 +193,23 @@ static void accumulate_energy_(const uint8_t *buf, size_t len, uint64_t energy[4
   }
 }
 
+static void apply_gain_(uint8_t *buf, size_t len, const float gain[4]) {
+  size_t num_frames = len / FRAME_SZ;
+  for (size_t f = 0; f < num_frames; f++) {
+    size_t base = f * FRAME_SZ;
+    for (int m = 0; m < 4; m++) {
+      size_t idx = base + MIC_SLOTS[m] * 2;
+      int16_t s;
+      memcpy(&s, &buf[idx], 2);
+      int32_t scaled = (int32_t)(s * gain[m]);
+      if (scaled > 32767) scaled = 32767;
+      if (scaled < -32768) scaled = -32768;
+      s = (int16_t) scaled;
+      memcpy(&buf[idx], &s, 2);
+    }
+  }
+}
+
 void I2STDMAudioMicrophone::mic_task(void *params) {
   I2STDMAudioMicrophone *mic = (I2STDMAudioMicrophone *) params;
   xEventGroupSetBits(mic->event_group_, MicrophoneEventGroupBits::TASK_STARTING);
@@ -204,17 +221,38 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
 
     xEventGroupSetBits(mic->event_group_, MicrophoneEventGroupBits::TASK_RUNNING);
 
+    const uint32_t CALIBRATION_FRAMES = 180;
+    uint64_t cal_energy[4] = {0};
+    uint32_t cal_frames = 0;
+    float cal_gain[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    bool calibrated = false;
+
     uint32_t log_counter = 0;
     uint64_t energy_accum[4] = {0};
-    float noise_floor[4] = {0};
+    float baseline[4] = {0};
     uint32_t energy_frames = 0;
-    uint8_t prev_best = 0;
     int switch_cooldown = 0;
-    const float MIN_SPEECH_SNR = 2.0f;
-    const int SWITCH_COOLDOWN_MAX = 30;
+    const float ACTIVITY_THRESHOLD = 2.0f;
+    const int SWITCH_COOLDOWN_MAX = 15;
+    const float BL_DECAY = 0.5f;
+    const float BL_GROW = 0.005f;
+    const float IMPROVE_THRESHOLD = 1.03f;
 
     while (!(xEventGroupGetBits(mic->event_group_) & MicrophoneEventGroupBits::COMMAND_STOP)) {
       if (mic->data_callbacks_.size() > 0) {
+        if (mic->needs_calibration_) {
+          mic->needs_calibration_ = false;
+          memset(cal_energy, 0, sizeof(cal_energy));
+          cal_frames = 0;
+          calibrated = false;
+          memset(baseline, 0, sizeof(baseline));
+          memset(energy_accum, 0, sizeof(energy_accum));
+          energy_frames = 0;
+          mic->best_mic_ = 0;
+          switch_cooldown = 0;
+          ESP_LOGI(TAG, "Manual calibration requested");
+        }
+
         samples.resize(bytes_to_read);
         size_t bytes_read = mic->read_(samples.data(), bytes_to_read, 2 * pdMS_TO_TICKS(READ_DURATION_MS));
         samples.resize(bytes_read);
@@ -223,48 +261,80 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
           continue;
         }
 
+        if (!calibrated) {
+          accumulate_energy_(samples.data(), bytes_read, cal_energy);
+          cal_frames++;
+          if (cal_frames >= CALIBRATION_FRAMES) {
+            float avg = 0;
+            for (int m = 0; m < 4; m++) avg += (float) cal_energy[m];
+            avg /= 4.0f;
+            for (int m = 0; m < 4; m++) {
+              if (cal_energy[m] > 0)
+                cal_gain[m] = avg / (float) cal_energy[m];
+            }
+            calibrated = true;
+            ESP_LOGI(TAG, "Calibrated gains: %.2f/%.2f/%.2f/%.2f",
+                     cal_gain[0], cal_gain[1], cal_gain[2], cal_gain[3]);
+          }
+        }
+
+        apply_gain_(samples.data(), bytes_read, cal_gain);
+
         accumulate_energy_(samples.data(), bytes_read, energy_accum);
         energy_frames++;
 
-        if (energy_frames >= 60) {
-          float snr[4] = {0};
-          uint8_t best = mic->best_mic_;
-          float best_snr = 0;
+        if (energy_frames >= 60 && calibrated) {
+          float e[4];
+          for (int m = 0; m < 4; m++) {
+            e[m] = (float) energy_accum[m];
+          }
 
           for (int m = 0; m < 4; m++) {
-            float e = (float) energy_accum[m];
-            if (noise_floor[m] < 1.0f) {
-              noise_floor[m] = e;
-            } else if (e < noise_floor[m]) {
-              noise_floor[m] = noise_floor[m] * 0.7f + e * 0.3f;
+            if (baseline[m] < 1.0f) {
+              baseline[m] = e[m];
+            } else if (e[m] < baseline[m]) {
+              baseline[m] = baseline[m] * (1.0f - BL_DECAY) + e[m] * BL_DECAY;
             } else {
-              noise_floor[m] = noise_floor[m] * 0.998f + e * 0.002f;
+              baseline[m] = baseline[m] * (1.0f - BL_GROW) + e[m] * BL_GROW;
             }
-            snr[m] = (noise_floor[m] > 0) ? e / noise_floor[m] : 1.0f;
-            if (snr[m] > best_snr) {
-              best_snr = snr[m];
+          }
+
+          float e_norm[4];
+          for (int m = 0; m < 4; m++) {
+            e_norm[m] = (baseline[m] > 0) ? e[m] / baseline[m] : 1.0f;
+          }
+
+          uint8_t best = 0;
+          float max_norm = e_norm[0];
+          for (int m = 1; m < 4; m++) {
+            if (e_norm[m] > max_norm) {
+              max_norm = e_norm[m];
               best = m;
             }
           }
 
+          bool has_activity = (max_norm > ACTIVITY_THRESHOLD);
+
           if (switch_cooldown > 0)
             switch_cooldown--;
 
-          if (best_snr > MIN_SPEECH_SNR && best != mic->best_mic_ && switch_cooldown == 0) {
-            ESP_LOGI(TAG, "Best mic: MIC%d -> MIC%d (SNR:%.1f)", mic->best_mic_ + 1, best + 1, best_snr);
-            mic->best_mic_ = best;
-            switch_cooldown = SWITCH_COOLDOWN_MAX;
+          if (has_activity && best != mic->best_mic_ && switch_cooldown == 0) {
+            float current_norm = e_norm[mic->best_mic_];
+            if (max_norm > current_norm * IMPROVE_THRESHOLD) {
+              ESP_LOGI(TAG, "Best mic: MIC%d -> MIC%d (n:%.1f/%.1f)",
+                       mic->best_mic_ + 1, best + 1, current_norm, max_norm);
+              mic->best_mic_ = best;
+              switch_cooldown = SWITCH_COOLDOWN_MAX;
+            }
           }
 
           if (mic->debug_) {
             log_counter++;
             if (log_counter % 2 == 0) {
-              ESP_LOGI(TAG, "E:%.0f/%.0f/%.0f/%.0f SNR:%.1f/%.1f/%.1f/%.1f NF:%.0f/%.0f/%.0f/%.0f best:MIC%d",
-                       (float)energy_accum[0], (float)energy_accum[1],
-                       (float)energy_accum[2], (float)energy_accum[3],
-                       snr[0], snr[1], snr[2], snr[3],
-                       noise_floor[0], noise_floor[1], noise_floor[2], noise_floor[3],
-                       mic->best_mic_ + 1);
+              ESP_LOGI(TAG, "n:%.1f/%.1f/%.1f/%.1f best:MIC%d%s",
+                       e_norm[0], e_norm[1], e_norm[2], e_norm[3],
+                       mic->best_mic_ + 1,
+                       has_activity ? " *" : "");
             }
           }
 

@@ -27,6 +27,7 @@ class I2STDMAudioMicrophone : public I2STDMAudioIn, public microphone::Microphon
   void set_bits_per_sample(uint8_t bits) { this->bits_per_sample_ = bits; }
   void set_correct_dc_offset(bool correct_dc_offset) { this->correct_dc_offset_ = correct_dc_offset; }
   void set_debug(bool debug) { this->debug_ = debug; }
+  void request_calibration() { this->needs_calibration_ = true; }
 
  protected:
   bool start_driver_();
@@ -45,6 +46,7 @@ class I2STDMAudioMicrophone : public I2STDMAudioIn, public microphone::Microphon
   i2s_chan_handle_t rx_handle_;
   bool correct_dc_offset_;
   bool debug_{false};
+  volatile bool needs_calibration_{false};
   bool locked_driver_{false};
   int32_t dc_offset_prev_input_{0};
   int32_t dc_offset_prev_output_{0};
