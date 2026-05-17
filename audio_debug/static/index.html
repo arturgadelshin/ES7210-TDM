@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Audio Debug</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:#1e293b;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #334155}
+.header h1{font-size:18px;color:#38bdf8}
+.status{display:flex;gap:12px;align-items:center;font-size:13px}
+.status .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.on{background:#22c55e;box-shadow:0 0 6px #22c55e}
+.dot.off{background:#ef4444}
+.dot.rec{background:#f59e0b;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.container{max-width:1400px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.container{grid-template-columns:1fr}}
+.panel{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155}
+.panel h2{font-size:15px;color:#94a3b8;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px}
+.full{grid-column:1/-1}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{padding:10px 20px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;transition:all .15s}
+button:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#3b82f6;color:#fff}
+.btn-primary:hover:not(:disabled){background:#2563eb}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-danger:hover:not(:disabled){background:#dc2626}
+.btn-success{background:#22c55e;color:#fff}
+.btn-success:hover:not(:disabled){background:#16a34a}
+.btn-ghost{background:transparent;color:#94a3b8;border:1px solid #475569}
+.btn-ghost:hover{background:#334155}
+.toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:#94a3b8}
+.toggle input{width:16px;height:16px;accent-color:#3b82f6}
+.rec-list{display:flex;flex-direction:column;gap:8px;max-height:500px;overflow-y:auto}
+.rec-item{background:#0f172a;border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:12px;border:1px solid #334155;cursor:pointer;transition:border-color .15s}
+.rec-item:hover{border-color:#3b82f6}
+.rec-item.selected{border-color:#3b82f6;background:#1a2744}
+.rec-info{flex:1}
+.rec-name{font-size:14px;font-weight:600;color:#e2e8f0}
+.rec-meta{font-size:12px;color:#64748b;margin-top:2px}
+.rec-actions{display:flex;gap:6px}
+.rec-actions button{padding:6px 10px;font-size:12px}
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.metric-card{background:#0f172a;border-radius:8px;padding:12px;text-align:center}
+.metric-val{font-size:22px;font-weight:700;color:#38bdf8}
+.metric-label{font-size:11px;color:#64748b;margin-top:4px;text-transform:uppercase}
+canvas{width:100%;height:200px;border-radius:8px;background:#0f172a}
+.compare-container{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:900px){.compare-container{grid-template-columns:1fr}}
+.compare-item{background:#0f172a;border-radius:8px;padding:8px}
+.compare-item h4{font-size:12px;color:#64748b;margin-bottom:4px}
+.compare-item canvas{height:120px}
+.empty{color:#475569;text-align:center;padding:40px;font-size:14px}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.tag-green{background:#166534;color:#4ade80}
+.tag-red{background:#991b1b;color:#fca5a5}
+.tag-yellow{background:#854d0e;color:#fde047}
+.capture-info{font-size:13px;color:#64748b;margin-top:8px}
+.capture-info.active{color:#f59e0b}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ESP32 Voice Assistant — Audio Debug</h1>
+  <div class="status">
+    <span class="dot off" id="dotStatus"></span>
+    <span id="statusText">Disconnected</span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Controls -->
+  <div class="panel full">
+    <h2>Controls</h2>
+    <div class="controls">
+      <button class="btn-primary" id="btnConnect" onclick="doConnect()">Connect</button>
+      <button class="btn-danger" id="btnDisconnect" onclick="doDisconnect()" disabled>Disconnect</button>
+      <button class="btn-ghost" id="btnRefresh" onclick="loadRecordings()">Refresh List</button>
+      <div class="toggle">
+        <input type="checkbox" id="chkAuto" checked onchange="toggleAuto(this.checked)">
+        <label for="chkAuto">Auto-capture on wake word</label>
+      </div>
+    </div>
+    <div class="capture-info" id="captureInfo">Connect to device and say wake word to capture audio</div>
+  </div>
+
+  <!-- Recording List -->
+  <div class="panel">
+    <h2>Recordings</h2>
+    <div class="rec-list" id="recList">
+      <div class="empty">No recordings yet</div>
+    </div>
+  </div>
+
+  <!-- Metrics -->
+  <div class="panel">
+    <h2>Metrics</h2>
+    <div class="metrics-grid" id="metricsGrid">
+      <div class="empty">Select a recording</div>
+    </div>
+  </div>
+
+  <!-- Waveform -->
+  <div class="panel full">
+    <h2>Waveform — <span id="waveTitle">select recording</span></h2>
+    <canvas id="waveCanvas"></canvas>
+  </div>
+
+  <!-- Spectrogram -->
+  <div class="panel full">
+    <h2>Spectrogram — <span id="specTitle">select recording</span></h2>
+    <canvas id="specCanvas"></canvas>
+  </div>
+
+  <!-- Compare -->
+  <div class="panel full">
+    <h2>Compare <span style="color:#64748b;font-size:12px">(Ctrl+Click to select 2nd)</span></h2>
+    <div class="compare-container" id="compareContainer">
+      <div class="empty">Select recordings to compare</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let selected = null;
+let compare = null;
+let isConnected = false;
+let pollTimer = null;
+
+async function api(method, path, body) {
+  const opts = {method, headers: {'Content-Type': 'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  return r.json();
+}
+
+function setStatus(connected, capturing) {
+  const dot = document.getElementById('dotStatus');
+  const txt = document.getElementById('statusText');
+  const btnConn = document.getElementById('btnConnect');
+  const btnDisc = document.getElementById('btnDisconnect');
+  const info = document.getElementById('captureInfo');
+  isConnected = connected;
+  dot.className = capturing ? 'dot rec' : connected ? 'dot on' : 'dot off';
+  txt.textContent = capturing ? 'Capturing...' : connected ? 'Connected' : 'Disconnected';
+  btnConn.disabled = connected;
+  btnDisc.disabled = !connected;
+  if (capturing) {
+    info.textContent = 'Capturing audio... speaking to device';
+    info.className = 'capture-info active';
+  } else if (connected) {
+    info.textContent = 'Say wake word to capture audio';
+    info.className = 'capture-info';
+  } else {
+    info.textContent = 'Connect to device and say wake word to capture audio';
+    info.className = 'capture-info';
+  }
+}
+
+async function pollStatus() {
+  if (!isConnected) return;
+  try {
+    const st = await api('GET', '/api/status');
+    setStatus(true, st.capturing);
+    if (st.last_recording && !window._lastSeen) {
+      window._lastSeen = st.last_recording.filename;
+      loadRecordings();
+    } else if (st.last_recording && st.last_recording.filename !== window._lastSeen) {
+      window._lastSeen = st.last_recording.filename;
+      loadRecordings();
+    }
+  } catch(e) {}
+}
+
+async function doConnect() {
+  setStatus(false, false);
+  document.getElementById('statusText').textContent = 'Connecting...';
+  try {
+    const info = await api('POST', '/api/connect');
+    if (info.error) { alert(info.error); setStatus(false, false); return; }
+    document.getElementById('statusText').textContent = info.name + ' (' + info.esphome_version + ')';
+    setStatus(true, false);
+    loadRecordings();
+    pollTimer = setInterval(pollStatus, 2000);
+  } catch(e) { alert('Connection failed: ' + e); setStatus(false, false); }
+}
+
+async function doDisconnect() {
+  await api('POST', '/api/disconnect');
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  setStatus(false, false);
+}
+
+async function toggleAuto(enabled) {
+  await api('POST', `/api/auto_capture/${enabled}`);
+}
+
+async function loadRecordings() {
+  const recs = await api('GET', '/api/recordings');
+  const el = document.getElementById('recList');
+  if (!recs.length) { el.innerHTML = '<div class="empty">No recordings yet</div>'; return; }
+  el.innerHTML = recs.map(r => `
+    <div class="rec-item ${selected===r.id?'selected':''}" onclick="selectRecording('${r.id}',event)">
+      <div class="rec-info">
+        <div class="rec-name">${r.filename||r.id}</div>
+        <div class="rec-meta">${r.duration||0}s | ${r.size_kb||0}KB | RMS ${r.rms_db||'--'}dB | SNR ${r.snr_estimate||'--'}</div>
+      </div>
+      <div class="rec-actions">
+        <button class="btn-primary" onclick="event.stopPropagation();playAudio('${r.id}')">Play</button>
+        <button class="btn-danger" onclick="event.stopPropagation();deleteRec('${r.id}')">Del</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function selectRecording(id, evt) {
+  if (evt && evt.ctrlKey) {
+    compare = id;
+    doCompare();
+    return;
+  }
+  selected = id;
+  document.title = 'ESP32 Audio Debug';
+  loadRecordings();
+
+  const m = await api('GET', `/api/recordings/${id}/metrics`);
+  document.getElementById('metricsGrid').innerHTML = `
+    <div class="metric-card"><div class="metric-val">${m.duration||0}s</div><div class="metric-label">Duration</div></div>
+    <div class="metric-card"><div class="metric-val">${m.rms_db||-96}dB</div><div class="metric-label">RMS</div></div>
+    <div class="metric-card"><div class="metric-val">${m.peak_db||-96}dB</div><div class="metric-label">Peak</div></div>
+    <div class="metric-card"><div class="metric-val">${m.snr_estimate||0}</div><div class="metric-label">SNR Est</div></div>
+    <div class="metric-card"><div class="metric-val">${m.rms||0}</div><div class="metric-label">RMS (abs)</div></div>
+    <div class="metric-card"><div class="metric-val">${m.peak||0}</div><div class="metric-label">Peak (abs)</div></div>
+    <div class="metric-card"><div class="metric-val">${m.sample_count||0}</div><div class="metric-label">Samples</div></div>
+    <div class="metric-card"><div class="metric-val">${(m.snr_estimate||0)>2?'<span class="tag tag-green">Good</span>':(m.snr_estimate||0)>1?'<span class="tag tag-yellow">OK</span>':'<span class="tag tag-red">Low</span>'}</div><div class="metric-label">Quality</div></div>
+  `;
+
+  document.getElementById('waveTitle').textContent = id;
+  document.getElementById('specTitle').textContent = id + ' (loading...)';
+  drawWaveform(id);
+  loadSpectrogram(id);
+}
+
+async function loadSpectrogram(id) {
+  const spec = await api('GET', `/api/recordings/${id}/spectrogram`);
+  document.getElementById('specTitle').textContent = id;
+  drawSpectrogram(spec);
+}
+
+function playAudio(id) {
+  new Audio(API + `/api/recordings/${id}/audio`).play();
+}
+
+async function deleteRec(id) {
+  if (!confirm('Delete ' + id + '?')) return;
+  await api('DELETE', `/api/recordings/${id}`);
+  if (selected === id) selected = null;
+  if (compare === id) compare = null;
+  loadRecordings();
+}
+
+async function drawWaveform(id) {
+  const data = await api('GET', `/api/recordings/${id}/waveform`);
+  const canvas = document.getElementById('waveCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const samples = data.samples;
+  if (!samples || !samples.length) return;
+  const maxVal = Math.max(...samples.map(Math.abs), 1);
+
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const step = canvas.width / samples.length;
+  for (let i = 0; i < samples.length; i++) {
+    const x = i * step;
+    const y = canvas.height / 2 - (samples[i] / maxVal) * (canvas.height / 2 - 10);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, canvas.height / 2);
+  ctx.lineTo(canvas.width, canvas.height / 2);
+  ctx.stroke();
+}
+
+function drawSpectrogram(spec) {
+  const canvas = document.getElementById('specCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!spec || !spec.power_db || !spec.power_db.length) {
+    ctx.fillStyle = '#475569';
+    ctx.font = '24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No spectrogram data', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  const rows = spec.power_db.length;
+  const cols = spec.power_db[0].length;
+  const allVals = spec.power_db.flat();
+  const vmin = Math.min(...allVals);
+  const vmax = Math.max(...allVals);
+  const range = vmax - vmin || 1;
+
+  for (let r = 0; r < rows; r++) {
+    const y = (r / rows) * canvas.height;
+    const h = canvas.height / rows + 1;
+    for (let c = 0; c < cols; c++) {
+      const x = (c / cols) * canvas.width;
+      const w = canvas.width / cols + 1;
+      const val = (spec.power_db[r][c] - vmin) / range;
+      const hue = (1 - val) * 240;
+      ctx.fillStyle = `hsl(${hue},90%,${val * 50 + 10}%)`;
+      ctx.fillRect(x, y, w, h);
+    }
+  }
+}
+
+async function doCompare() {
+  if (!selected || !compare) return;
+  const container = document.getElementById('compareContainer');
+  container.innerHTML = '<div class="empty">Loading...</div>';
+
+  const [w1, w2] = await Promise.all([
+    api('GET', `/api/recordings/${selected}/waveform`),
+    api('GET', `/api/recordings/${compare}/waveform`)
+  ]);
+
+  container.innerHTML = `
+    <div class="compare-item">
+      <h4>${selected}</h4>
+      <canvas id="cmp1"></canvas>
+    </div>
+    <div class="compare-item">
+      <h4>${compare}</h4>
+      <canvas id="cmp2"></canvas>
+    </div>
+  `;
+
+  drawMiniWave('cmp1', w1.samples);
+  drawMiniWave('cmp2', w2.samples);
+}
+
+function drawMiniWave(canvasId, samples) {
+  const c = document.getElementById(canvasId);
+  if (!c || !samples || !samples.length) return;
+  const ctx = c.getContext('2d');
+  c.width = c.offsetWidth * 2;
+  c.height = c.offsetHeight * 2;
+  const maxVal = Math.max(...samples.map(Math.abs), 1);
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const step = c.width / samples.length;
+  for (let i = 0; i < samples.length; i++) {
+    const x = i * step;
+    const y = c.height / 2 - (samples[i] / maxVal) * (c.height / 2 - 5);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+loadRecordings();
+</script>
+</body>
+</html>
