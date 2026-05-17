@@ -98,6 +98,7 @@ microphone:
     sample_rate: 16000
     bits_per_sample: 32bit
     correct_dc_offset: false
+    debug: false
 
 # === ES8311 speaker ===
 audio_dac:

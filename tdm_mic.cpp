@@ -19,6 +19,9 @@ static const ssize_t TASK_PRIORITY = 23;
 static const char *const TAG = "i2s_tdm_audio.microphone";
 
 static const uint32_t NUM_CHANNELS = 8;
+static const size_t FRAME_SZ = 2 * NUM_CHANNELS;
+
+static const uint8_t MIC_SLOTS[4] = {0, 4, 2, 6};
 
 enum MicrophoneEventGroupBits : uint32_t {
   COMMAND_STOP = (1 << 0),
@@ -126,6 +129,9 @@ bool I2STDMAudioMicrophone::start_driver_() {
   }
 
   this->audio_stream_info_ = audio::AudioStreamInfo(16, NUM_CHANNELS, this->sample_rate_);
+  this->best_mic_ = 0;
+  this->energy_counter_ = 0;
+  memset(this->mic_energy_, 0, sizeof(this->mic_energy_));
   ESP_LOGI(TAG, "TDM driver started on I2S port %d", (int)this->parent_->get_port());
 
   return true;
@@ -162,6 +168,31 @@ void I2STDMAudioMicrophone::stop_driver_() {
   }
 }
 
+static void remap_best_mic_(uint8_t *buf, size_t len, uint8_t best_mic) {
+  if (best_mic == 0)
+    return;
+  uint8_t src_slot = MIC_SLOTS[best_mic];
+  size_t num_frames = len / FRAME_SZ;
+  for (size_t f = 0; f < num_frames; f++) {
+    size_t base = f * FRAME_SZ;
+    buf[base + 0] = buf[base + src_slot * 2 + 0];
+    buf[base + 1] = buf[base + src_slot * 2 + 1];
+  }
+}
+
+static void accumulate_energy_(const uint8_t *buf, size_t len, uint64_t energy[4]) {
+  size_t num_frames = len / FRAME_SZ;
+  for (size_t f = 0; f < num_frames; f++) {
+    size_t base = f * FRAME_SZ;
+    for (int m = 0; m < 4; m++) {
+      size_t idx = base + MIC_SLOTS[m] * 2;
+      int16_t s;
+      memcpy(&s, &buf[idx], 2);
+      energy[m] += (uint32_t)(s > 0 ? s : -s);
+    }
+  }
+}
+
 void I2STDMAudioMicrophone::mic_task(void *params) {
   I2STDMAudioMicrophone *mic = (I2STDMAudioMicrophone *) params;
   xEventGroupSetBits(mic->event_group_, MicrophoneEventGroupBits::TASK_STARTING);
@@ -174,6 +205,13 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
     xEventGroupSetBits(mic->event_group_, MicrophoneEventGroupBits::TASK_RUNNING);
 
     uint32_t log_counter = 0;
+    uint64_t energy_accum[4] = {0};
+    float noise_floor[4] = {0};
+    uint32_t energy_frames = 0;
+    uint8_t prev_best = 0;
+    int switch_cooldown = 0;
+    const float MIN_SPEECH_SNR = 2.0f;
+    const int SWITCH_COOLDOWN_MAX = 30;
 
     while (!(xEventGroupGetBits(mic->event_group_) & MicrophoneEventGroupBits::COMMAND_STOP)) {
       if (mic->data_callbacks_.size() > 0) {
@@ -181,32 +219,66 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
         size_t bytes_read = mic->read_(samples.data(), bytes_to_read, 2 * pdMS_TO_TICKS(READ_DURATION_MS));
         samples.resize(bytes_read);
 
+        if (bytes_read == 0) {
+          continue;
+        }
+
+        accumulate_energy_(samples.data(), bytes_read, energy_accum);
+        energy_frames++;
+
+        if (energy_frames >= 60) {
+          float snr[4] = {0};
+          uint8_t best = mic->best_mic_;
+          float best_snr = 0;
+
+          for (int m = 0; m < 4; m++) {
+            float e = (float) energy_accum[m];
+            if (noise_floor[m] < 1.0f) {
+              noise_floor[m] = e;
+            } else if (e < noise_floor[m]) {
+              noise_floor[m] = noise_floor[m] * 0.7f + e * 0.3f;
+            } else {
+              noise_floor[m] = noise_floor[m] * 0.998f + e * 0.002f;
+            }
+            snr[m] = (noise_floor[m] > 0) ? e / noise_floor[m] : 1.0f;
+            if (snr[m] > best_snr) {
+              best_snr = snr[m];
+              best = m;
+            }
+          }
+
+          if (switch_cooldown > 0)
+            switch_cooldown--;
+
+          if (best_snr > MIN_SPEECH_SNR && best != mic->best_mic_ && switch_cooldown == 0) {
+            ESP_LOGI(TAG, "Best mic: MIC%d -> MIC%d (SNR:%.1f)", mic->best_mic_ + 1, best + 1, best_snr);
+            mic->best_mic_ = best;
+            switch_cooldown = SWITCH_COOLDOWN_MAX;
+          }
+
+          if (mic->debug_) {
+            log_counter++;
+            if (log_counter % 2 == 0) {
+              ESP_LOGI(TAG, "E:%.0f/%.0f/%.0f/%.0f SNR:%.1f/%.1f/%.1f/%.1f NF:%.0f/%.0f/%.0f/%.0f best:MIC%d",
+                       (float)energy_accum[0], (float)energy_accum[1],
+                       (float)energy_accum[2], (float)energy_accum[3],
+                       snr[0], snr[1], snr[2], snr[3],
+                       noise_floor[0], noise_floor[1], noise_floor[2], noise_floor[3],
+                       mic->best_mic_ + 1);
+            }
+          }
+
+          memset(energy_accum, 0, sizeof(energy_accum));
+          energy_frames = 0;
+        }
+
+        remap_best_mic_(samples.data(), bytes_read, mic->best_mic_);
+
         if (mic->correct_dc_offset_) {
           mic->fix_dc_offset_(samples);
         }
 
         mic->data_callbacks_.call(samples);
-
-        log_counter++;
-        if (log_counter % 300 == 0 && bytes_read > 0) {
-          const size_t frame_sz = 2 * NUM_CHANNELS;
-          size_t num_frames = bytes_read / frame_sz;
-
-          int32_t ch_peak[8] = {0};
-          for (size_t f = 0; f < num_frames && f < 160; f++) {
-            for (int ch = 0; ch < 8; ch++) {
-              size_t idx = f * frame_sz + ch * 2;
-              if (idx + 2 > bytes_read) break;
-              int16_t s;
-              memcpy(&s, &samples[idx], 2);
-              int32_t sample_val = abs(s);
-              if (sample_val > ch_peak[ch]) ch_peak[ch] = sample_val;
-            }
-          }
-
-          ESP_LOGI(TAG, "TDM peak - MIC1:%ld MIC3:%ld MIC2:%ld MIC4:%ld",
-                   ch_peak[0], ch_peak[2], ch_peak[4], ch_peak[6]);
-        }
       } else {
         vTaskDelay(pdMS_TO_TICKS(READ_DURATION_MS));
       }

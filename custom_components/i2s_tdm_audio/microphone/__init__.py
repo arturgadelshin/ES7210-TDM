@@ -16,6 +16,7 @@ CODEOWNERS = ["@custom"]
 DEPENDENCIES = ["i2s_tdm_audio"]
 
 CONF_CORRECT_DC_OFFSET = "correct_dc_offset"
+CONF_DEBUG = "debug"
 
 I2STDMAudioMicrophone = i2s_tdm_audio_ns.class_(
     "I2STDMAudioMicrophone", I2STDMAudioIn, microphone.Microphone, cg.Component
@@ -47,6 +48,7 @@ CONFIG_SCHEMA = (
                 _validate_bits, cv.one_of(16, 24, 32)
             ),
             cv.Optional(CONF_CORRECT_DC_OFFSET, default=False): cv.boolean,
+            cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         })
     ).extend(cv.COMPONENT_SCHEMA)
 )
@@ -64,3 +66,4 @@ async def to_code(config):
     cg.add(var.set_sample_rate(config[CONF_SAMPLE_RATE]))
     cg.add(var.set_bits_per_sample(config[CONF_BITS_PER_SAMPLE]))
     cg.add(var.set_correct_dc_offset(config[CONF_CORRECT_DC_OFFSET]))
+    cg.add(var.set_debug(config[CONF_DEBUG]))
