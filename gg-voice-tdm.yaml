@@ -323,6 +323,21 @@ light:
     chipset: ws2812
     default_transition_length: 0s
     effects:
+      - addressable_lambda:
+          name: "Police"
+          update_interval: 100ms
+          lambda: |-
+            static int offset = 0;
+            offset = (offset + 1) % it.size();
+            int half = it.size() / 2;
+            for (int i = 0; i < it.size(); i++) {
+              int pos = (i + offset) % it.size();
+              if (pos < half) {
+                it[i] = Color(255, 0, 0);
+              } else {
+                it[i] = Color(0, 0, 255);
+              }
+            }
       - pulse:
           name: "Pulse"
           transition_length: 0.5s
