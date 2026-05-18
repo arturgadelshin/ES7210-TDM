@@ -2,16 +2,17 @@ from dataclasses import dataclass, field
 
 from esphome import pins
 import esphome.codegen as cg
-from esphome.components.esp32 import (
-    add_idf_sdkconfig_option,
-    get_esp32_variant,
-    include_builtin_idf_component,
-)
+from esphome.components.esp32 import add_idf_sdkconfig_option, get_esp32_variant
 from esphome.components.esp32.const import VARIANT_ESP32S3
 import esphome.config_validation as cv
 from esphome.const import CONF_BITS_PER_SAMPLE, CONF_CHANNEL, CONF_ID, CONF_SAMPLE_RATE
 from esphome.core import CORE
 import esphome.final_validate as fv
+
+try:
+    from esphome.components.esp32 import include_builtin_idf_component
+except ImportError:
+    include_builtin_idf_component = None
 
 CODEOWNERS = ["@custom"]
 DEPENDENCIES = ["esp32"]
@@ -69,5 +70,6 @@ async def to_code(config):
     if CONF_I2S_MCLK_PIN in config:
         cg.add(var.set_mclk_pin(config[CONF_I2S_MCLK_PIN]))
 
-    include_builtin_idf_component("esp_driver_i2s")
+    if include_builtin_idf_component is not None:
+        include_builtin_idf_component("esp_driver_i2s")
     add_idf_sdkconfig_option("CONFIG_I2S_ISR_IRAM_SAFE", True)
