@@ -5,6 +5,13 @@ substitutions:
   id_2: muliy_dom2_1_17_lh
   external_media_player_id: speaker_media_player_id
 
+external_components:
+  - source:
+      type: git
+      url: https://github.com/arturgadelshin/ES7210-TDM
+      ref: master
+    components: [es7210_tdm, i2s_tdm_audio]
+
 esphome:
   name: ${name}
   min_version: 2023.11.0
