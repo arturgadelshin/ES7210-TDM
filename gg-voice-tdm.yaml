@@ -46,6 +46,7 @@ esp32:
     sdkconfig_options:
       CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"
+      CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY: "y"
 
 psram:
   mode: octal
@@ -61,10 +62,31 @@ api:
 ota:
   - platform: esphome
 
+debug:
+  update_interval: 1s
+
+sensor:
+  - platform: debug
+    free:
+      name: "Free Heap"
+    loop_time:
+      name: "Loop Time"
+    block:
+      name: "Largest Free Block"
+    psram:
+      name: "Free PSRAM"
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
 text_sensor:
   - platform: ethernet_info
     ip_address:
       name: "$ IP Address"
+  - platform: template
+    name: "BLE Devices"
+    id: ble_devices
+    icon: "mdi:bluetooth"
 
 ethernet:
   type: W5500
@@ -122,6 +144,82 @@ i2s_audio:
     i2s_lrclk_pin: GPIO41
     i2s_bclk_pin: GPIO40
     i2s_mclk_pin: GPIO42
+
+# === BLE PRESENCE SCANNER ===
+globals:
+  - id: g_rssi_map
+    type: std::map<std::string, int>
+    restore_value: no
+  - id: g_seen_map
+    type: std::map<std::string, uint32_t>
+    restore_value: no
+  - id: g_last_json
+    type: std::string
+    restore_value: no
+    initial_value: '"[]"'
+
+esp32_ble_tracker:
+  scan_parameters:
+    continuous: true
+    duration: 5s
+    interval: 50ms
+    window: 50ms
+    active: false
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            std::string user_id = "";
+            for (auto &mfg : x.get_manufacturer_datas()) {
+              if (mfg.uuid.to_string().find("FEFF") != std::string::npos) {
+                user_id = std::string(mfg.data.begin(), mfg.data.end());
+                break;
+              }
+            }
+            if (user_id.empty()) return;
+            int rssi = x.get_rssi();
+            bool is_new = !id(g_seen_map).count(user_id);
+            float alpha = 0.7;
+            int prev = id(g_rssi_map).count(user_id) ? id(g_rssi_map)[user_id] : rssi;
+            id(g_rssi_map)[user_id] = (int)(alpha * rssi + (1.0 - alpha) * prev);
+            id(g_seen_map)[user_id] = millis();
+            if (is_new) {
+              std::string json = "[";
+              bool first = true;
+              for (auto &kv : id(g_seen_map)) {
+                if (!first) json += ",";
+                json += "{\"id\":\"" + kv.first + "\",\"rssi\":" + to_string(id(g_rssi_map)[kv.first]) + "}";
+                first = false;
+              }
+              json += "]";
+              id(g_last_json) = json;
+              id(ble_devices).publish_state(json);
+            }
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          for (auto it = id(g_seen_map).begin(); it != id(g_seen_map).end();) {
+            if (now - it->second >= 2000) {
+              id(g_rssi_map).erase(it->first);
+              it = id(g_seen_map).erase(it);
+            } else {
+              ++it;
+            }
+          }
+          std::string json = "[";
+          bool first = true;
+          for (auto &kv : id(g_seen_map)) {
+            if (!first) json += ",";
+            json += "{\"id\":\"" + kv.first + "\",\"rssi\":" + to_string(id(g_rssi_map)[kv.first]) + "}";
+            first = false;
+          }
+          json += "]";
+          if (json != id(g_last_json)) {
+            id(g_last_json) = json;
+            id(ble_devices).publish_state(json);
+          }
 
 speaker:
   - platform: i2s_audio
