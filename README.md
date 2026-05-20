@@ -83,13 +83,15 @@ ESPHome voice_assistant и micro_wake_word строго моно (max_channels=1
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ 1. КАЛИБРОВКА (3 сек при старте мика)                   │
+│ 1. КАЛИБРОВКА (опционально, calibration: true)          │
+│    3 сек при старте мика                                │
 │    Накапливает энергию каждого канала в тишине          │
 │    cal_gain[m] = avg_energy / energy[m]                 │
 │    → выравнивает разную чувствительность капсюлей       │
 ├─────────────────────────────────────────────────────────┤
 │ 2. КАЖДЫЙ КАДР                                         │
 │    apply_gain_(буфер, cal_gain) → калиброванные сэмплы  │
+│    (только при calibration: true)                       │
 ├─────────────────────────────────────────────────────────┤
 │ 3. КАЖДЫЕ ~1 СЕК (60 кадров)                           │
 │    e_norm[m] = energy[m] / baseline[m]                  │
@@ -104,12 +106,20 @@ ESPHome voice_assistant и micro_wake_word строго моно (max_channels=1
 │    → переключиться на best, cooldown = 15 сек           │
 ├─────────────────────────────────────────────────────────┤
 │ 4. REMAP                                               │
-│    Данные лучшего мика копируются в slot 0 (моно)       │
+│    Данные 4 миков усредняются в slot 0 (моно)           │
 │    → voice_assistant и micro_wake_word получают 1 канал │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Ручная калибровка**: кнопка "Calibrate Mics" в Home Assistant запускает перекалибровку (нужна тишина ~3 сек).
+### YAML параметры микрофона
+
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| `calibration` | `false` | Включить автокалибровку gain при старте и по кнопке |
+| `correct_dc_offset` | `false` | DC offset фильтрация |
+| `debug` | `false` | Лог нормализованной энергии миков |
+
+**Ручная калибровка**: кнопка "Calibrate Mics" в Home Assistant запускает перекалибровку (работает только при `calibration: true`).
 
 ## Решённые проблемы
 
@@ -184,7 +194,7 @@ python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
 VoiceAssistant/
 ├── gg-voice-tdm.yaml                    # Основной YAML конфиг ESPHome
 ├── tdm_mic.cpp                          # Исходник TDM микрофона (калибровка, VAD, remap)
-├── custom_components/
+├── components/
 │   ├── es7210_tdm/                      # ES7210 с TDM режимом
 │   │   ├── __init__.py                  # Python схема
 │   │   ├── es7210_tdm.h                 # Заголовок
@@ -196,7 +206,7 @@ VoiceAssistant/
 │       └── microphone/
 │           ├── __init__.py              # Python схема (debug, calibration параметры)
 │           ├── i2s_tdm_audio_microphone.h  # Заголовок (needs_calibration_, best_mic_)
-│           └── i2s_tdm_audio_microphone.cpp  # (заменить из tdm_mic.cpp)
+│           └── i2s_tdm_audio_microphone.cpp  # (копия tdm_mic.cpp)
 ├── SESSION.md                           # История сессии разработки
 └── README.md                            # Этот файл
 ```

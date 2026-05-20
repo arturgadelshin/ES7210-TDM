@@ -25,6 +25,7 @@ class I2STDMAudioMicrophone : public I2STDMAudioIn, public microphone::Microphon
 
   void set_din_pin(int8_t pin) { this->din_pin_ = (gpio_num_t) pin; }
   void set_bits_per_sample(uint8_t bits) { this->bits_per_sample_ = bits; }
+  void set_calibration(bool calibration) { this->calibration_ = calibration; }
   void set_correct_dc_offset(bool correct_dc_offset) { this->correct_dc_offset_ = correct_dc_offset; }
   void set_debug(bool debug) { this->debug_ = debug; }
   void request_calibration() { this->needs_calibration_ = true; }
@@ -44,6 +45,7 @@ class I2STDMAudioMicrophone : public I2STDMAudioIn, public microphone::Microphon
 
   gpio_num_t din_pin_;
   i2s_chan_handle_t rx_handle_;
+  bool calibration_{false};
   bool correct_dc_offset_;
   bool debug_{false};
   volatile bool needs_calibration_{false};

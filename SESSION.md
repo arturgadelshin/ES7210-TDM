@@ -1,5 +1,28 @@
 # Сессия разработки ESP32-S3 Voice Assistant с TDM
 
+## Дата: 20 мая 2026
+
+## Цель
+Сделать автокалибровку микрофонов опциональной через YAML параметр.
+
+## Изменения
+
+### Шаг 16: YAML опция `calibration`
+Калибровка микрофонов (авто при старте + по кнопке) вынесена в YAML параметр:
+- Добавлен `calibration: true/false` (default `false`) в Python схему (`microphone/__init__.py`)
+- Добавлен `calibration_` флаг + `set_calibration()` в заголовок (`i2s_tdm_audio_microphone.h`)
+- В `mic_task` калибровка, `apply_gain_()` и ручной триггер обёрнуты в `if (mic->calibration_)`
+- YAML конфиг обновлён: `external_components` переключён на локальный `path: components`
+- Прошивка собрана и загружена по OTA на 192.168.0.112
+
+При `calibration: false`:
+- Нет 3-секундной калибровки при старте
+- `apply_gain_()` не вызывается (gain = 1.0 для всех)
+- Кнопка "Calibrate Mics" игнорируется
+- VAD-выбор лучшего мика и `average_mics_()` работают как раньше
+
+---
+
 ## Дата: 17 мая 2026
 
 ## Цель

@@ -7,9 +7,8 @@ substitutions:
 
 external_components:
   - source:
-      type: git
-      url: https://github.com/arturgadelshin/ES7210-TDM
-      ref: master
+      type: local
+      path: components
     components: [es7210_tdm, i2s_tdm_audio]
 
 esphome:
@@ -126,6 +125,7 @@ microphone:
     i2s_din_pin: GPIO16
     sample_rate: 16000
     bits_per_sample: 32bit
+    calibration: false
     correct_dc_offset: false
     debug: true
 

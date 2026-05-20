@@ -244,7 +244,7 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
 
     while (!(xEventGroupGetBits(mic->event_group_) & MicrophoneEventGroupBits::COMMAND_STOP)) {
       if (mic->data_callbacks_.size() > 0) {
-        if (mic->needs_calibration_) {
+        if (mic->needs_calibration_ && mic->calibration_) {
           mic->needs_calibration_ = false;
           memset(cal_energy, 0, sizeof(cal_energy));
           cal_frames = 0;
@@ -265,7 +265,7 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
           continue;
         }
 
-        if (!calibrated) {
+        if (!calibrated && mic->calibration_) {
           accumulate_energy_(samples.data(), bytes_read, cal_energy);
           cal_frames++;
           if (cal_frames >= CALIBRATION_FRAMES) {
@@ -282,7 +282,9 @@ void I2STDMAudioMicrophone::mic_task(void *params) {
           }
         }
 
-        apply_gain_(samples.data(), bytes_read, cal_gain);
+        if (mic->calibration_) {
+          apply_gain_(samples.data(), bytes_read, cal_gain);
+        }
 
         accumulate_energy_(samples.data(), bytes_read, energy_accum);
         energy_frames++;

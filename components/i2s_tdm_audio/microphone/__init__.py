@@ -15,6 +15,7 @@ from .. import I2STDMAudioComponent
 CODEOWNERS = ["@custom"]
 DEPENDENCIES = ["i2s_tdm_audio"]
 
+CONF_CALIBRATION = "calibration"
 CONF_CORRECT_DC_OFFSET = "correct_dc_offset"
 CONF_DEBUG = "debug"
 
@@ -47,6 +48,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_BITS_PER_SAMPLE, default="32bit"): cv.All(
                 _validate_bits, cv.one_of(16, 24, 32)
             ),
+            cv.Optional(CONF_CALIBRATION, default=False): cv.boolean,
             cv.Optional(CONF_CORRECT_DC_OFFSET, default=False): cv.boolean,
             cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         })
@@ -62,6 +64,7 @@ async def to_code(config):
     await cg.register_parented(var, config[CONF_I2S_TDM_AUDIO_ID])
     await microphone.register_microphone(var, config)
 
+    cg.add(var.set_calibration(config[CONF_CALIBRATION]))
     cg.add(var.set_din_pin(config[CONF_I2S_DIN_PIN]))
     cg.add(var.set_sample_rate(config[CONF_SAMPLE_RATE]))
     cg.add(var.set_bits_per_sample(config[CONF_BITS_PER_SAMPLE]))
